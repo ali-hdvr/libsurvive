@@ -34,11 +34,11 @@ typedef struct SurviveSensorActivations_s {
 	// Valid only for Gen1
 	survive_timecode lengths[SENSORS_PER_OBJECT][NUM_GEN1_LIGHTHOUSES][2]; // Timecode per axis in ticks
 
-	uint32_t rollover_count;
 	size_t imu_init_cnt;
-	survive_timecode last_imu;
-	survive_timecode last_light;
+	survive_long_timecode last_imu;
+	survive_long_timecode last_light;
 	survive_long_timecode last_movement; // Tracks the timecode of the last IMU packet which saw movement.
+
 	FLT accel[3];
 	FLT gyro[3];
 	FLT mag[3];
@@ -48,6 +48,8 @@ struct PoserDataLight;
 struct PoserDataIMU;
 
 SURVIVE_EXPORT void SurviveSensorActivations_ctor(SurviveObject *so, SurviveSensorActivations *self);
+SURVIVE_EXPORT survive_long_timecode SurviveSensorActivations_long_timecode_imu(const SurviveSensorActivations *self, survive_timecode timecode);
+SURVIVE_EXPORT survive_long_timecode SurviveSensorActivations_long_timecode_light(const SurviveSensorActivations *self, survive_timecode timecode);
 
 /**
  * Adds a lightData packet to the table.
@@ -77,10 +79,7 @@ SURVIVE_EXPORT bool SurviveSensorActivations_isPairValid(const SurviveSensorActi
 /**
  * Returns the amount of time stationary
  */
-SURVIVE_EXPORT survive_timecode SurviveSensorActivations_stationary_time(const SurviveSensorActivations *self);
-SURVIVE_EXPORT survive_long_timecode survive_extend_time(const SurviveObject *so, survive_timecode time);
-SURVIVE_EXPORT survive_long_timecode SurviveSensorActivations_extend_time(const SurviveSensorActivations *self,
-																		  survive_timecode time);
+SURVIVE_EXPORT survive_long_timecode SurviveSensorActivations_stationary_time(const SurviveSensorActivations *self);
 /**
  * Default tolerance that gives a somewhat accuate representation of current state.
  *
@@ -183,6 +182,10 @@ struct SurviveObject {
 
 	char *conf;
 	size_t conf_cnt;
+
+	struct {
+		uint32_t hit_from_lhs[NUM_GEN2_LIGHTHOUSES];
+	} stats;
 };
 
 // These exports are mostly for language binding against
@@ -346,9 +349,9 @@ static inline SurviveContext *survive_init(int argc, char *const *argv) {
 // For any of these, you may pass in 0 for the function pointer to use default behavior.
 // In general unless you are doing wacky things like recording or playing back data, you won't need to use this.
 #define SURVIVE_HOOK_PROCESS_DEF(hook)                                                                                 \
-	SURVIVE_EXPORT void survive_install_##hook##_fn(SurviveContext *ctx, hook##_process_func fbp);
+	SURVIVE_EXPORT hook##_process_func survive_install_##hook##_fn(SurviveContext *ctx, hook##_process_func fbp);
 #define SURVIVE_HOOK_FEEDBACK_DEF(hook)                                                                                \
-	SURVIVE_EXPORT void survive_install_##hook##_fn(SurviveContext *ctx, hook##_feedback_func fbp);
+	SURVIVE_EXPORT hook##_feedback_func survive_install_##hook##_fn(SurviveContext *ctx, hook##_feedback_func fbp);
 #include "survive_hooks.h"
 
 SURVIVE_EXPORT int survive_startup(SurviveContext *ctx);
@@ -374,6 +377,9 @@ enum survive_config_flags {
 SURVIVE_EXPORT bool survive_config_is_set(SurviveContext *ctx, const char *tag);
 SURVIVE_EXPORT FLT survive_configf(SurviveContext *ctx, const char *tag, char flags, FLT def);
 SURVIVE_EXPORT uint32_t survive_configi(SurviveContext *ctx, const char *tag, char flags, uint32_t def);
+SURVIVE_EXPORT void survive_config_as_str(SurviveContext *ctx, char *output, size_t n, const char *tag,
+										  const char *def);
+
 SURVIVE_EXPORT const char *survive_configs(SurviveContext *ctx, const char *tag, char flags, const char *def);
 
 SURVIVE_EXPORT void survive_attach_configi(SurviveContext *ctx, const char *tag, int * var );
@@ -386,7 +392,7 @@ SURVIVE_EXPORT int8_t survive_get_bsd_idx(SurviveContext *ctx, survive_channel c
 #define STATIC_CONFIG_ITEM(variable, name, type, description, default_value)                                           \
 	const char *variable##_TAG = name;                                                                                 \
 	SURVIVE_EXPORT_CONSTRUCTOR void REGISTER##variable() {                                                             \
-		survive_config_bind_variable(type, name, description, default_value);                                          \
+		survive_config_bind_variable(type, name, description, default_value, 0xcafebeef);                              \
 	}
 SURVIVE_EXPORT void survive_config_bind_variable(char vt, const char *name, const char *description,
 												 ...); // Only used at boot.
@@ -446,7 +452,13 @@ SURVIVE_EXPORT double survive_run_time(const SurviveContext *ctx);
 SURVIVE_EXPORT void RegisterDriver(const char *name, survive_driver_fn data);
 
 #define REGISTER_LINKTIME(func)                                                                                        \
-	SURVIVE_EXPORT_CONSTRUCTOR void REGISTER##func() { RegisterDriver(#func, (survive_driver_fn)&func); }
+	SURVIVE_EXPORT_CONSTRUCTOR void REGISTER##func() {                                                                 \
+		static bool loaded = false;                                                                                    \
+		if (loaded == false) {                                                                                         \
+			RegisterDriver(#func, (survive_driver_fn)&func);                                                           \
+		};                                                                                                             \
+		loaded = true;                                                                                                 \
+	}
 
 ///////////////////////// General stuff for writing drivers ///////
 

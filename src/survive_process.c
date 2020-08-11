@@ -48,7 +48,7 @@ void survive_default_light_process( SurviveObject * so, int sensor_id, int acode
 						.hdr =
 							{
 								.pt = POSERDATA_SYNC,
-								.timecode = timecode,
+								.timecode = SurviveSensorActivations_long_timecode_light(&so->activations, timecode),
 							},
 						.sensor_id = sensor_id,
 						.angle = 0,
@@ -93,7 +93,7 @@ void survive_default_angle_process( SurviveObject * so, int sensor_id, int acode
 				.hdr =
 					{
 						.pt = POSERDATA_LIGHT,
-						.timecode = timecode,
+						.timecode = SurviveSensorActivations_long_timecode_light(&so->activations, timecode),
 					},
 				.sensor_id = sensor_id,
 				.angle = angle,
@@ -123,45 +123,9 @@ void survive_default_lightcap_process(SurviveObject *so, const LightcapElement *
 
 void survive_default_button_process(SurviveObject * so, uint8_t eventType, uint8_t buttonId, uint8_t axis1Id, uint16_t axis1Val, uint8_t axis2Id, uint16_t axis2Val)
 {
-	// do nothing.
-	//printf("ButtonEntry: eventType:%x, buttonId:%d, axis1:%d, axis1Val:%8.8x, axis2:%d, axis2Val:%8.8x\n",
-	//	eventType,
-	//	buttonId,
-	//	axis1Id,
-	//	axis1Val,
-	//	axis2Id,
-	//	axis2Val);
-	//if (buttonId == 24 && eventType == 1) // trigger engage
-	//{
-	//	for (int j = 0; j < 6; j++)
-	//	{
-	//		for (int i = 0; i < 0x5; i++)
-	//		{
-	//			survive_haptic(so, 0, 0xf401, 0xb5a2, 0x0100);
-	//			//survive_haptic(so, 0, 0xf401, 0xb5a2, 0x0100);
-	//			OGUSleep(1000);
-	//		}
-	//		OGUSleep(20000);
-	//	}
-	//}
-	//if (buttonId == 2 && eventType == 1) // trigger engage
-	//{
-	//	for (int j = 0; j < 6; j++)
-	//	{
-	//		for (int i = 0; i < 0x1; i++)
-	//		{
-	//			survive_haptic(so, 0, 0xf401, 0x05a2, 0xf100);
-	//			//survive_haptic(so, 0, 0xf401, 0xb5a2, 0x0100);
-	//			OGUSleep(5000);
-	//		}
-	//		OGUSleep(20000);
-	//	}
-	//}
 }
 
 void survive_default_pose_process(SurviveObject *so, uint32_t timecode, SurvivePose *pose) {
-	// print the pose;
-	//printf("Pose: [%1.1x][%s][% 08.8f,% 08.8f,% 08.8f] [% 08.8f,% 08.8f,% 08.8f,% 08.8f]\n", lighthouse, so->codename, pos[0], pos[1], pos[2], quat[0], quat[1], quat[2], quat[3]);
 	so->OutPose = *pose;
 	so->OutPose_timecode = timecode;
 	survive_recording_raw_pose_process(so, timecode, pose);
@@ -272,10 +236,46 @@ static void calibrate_gyro(SurviveObject *so, FLT *agm) {
 }
 
 void survive_default_raw_imu_process(SurviveObject *so, int mask, FLT *accelgyromag, uint32_t timecode, int id) {
+	SurviveContext *ctx = so->ctx;
+
 	FLT agm[9] = {0};
 	memcpy(agm, accelgyromag, sizeof(FLT) * 9);
+
 	calibrate_acc(so, agm);
 	calibrate_gyro(so, agm + 3);
+
+	static FLT accum[3] = {0};
+	static survive_timecode start = 0;
+	static uint32_t cnt = 0.;
+
+	survive_timecode stationary_time = SurviveSensorActivations_stationary_time(&so->activations);
+	FLT n = norm3d(agm);
+
+	if (stationary_time > so->timebase_hz / 2 && n > .95 && n < 1.05) {
+		scale3d(so->acc_scale, so->acc_scale, 1. / n);
+
+		FLT gerr = norm3d(accelgyromag + 3);
+		/*
+		FLT gcorrect[3];
+		scale3d(gcorrect, accelgyromag + 3, .1);
+		scale3d(so->gyro_bias, so->gyro_bias, .9);
+		add3d(so->gyro_bias, so->gyro_bias, gcorrect);
+*/
+		if (norm3d(accum) != 0.) {
+			survive_timecode end = timecode;
+			FLT seconds = (end - start) / (FLT)so->timebase_hz;
+			scale3d(accum, accum, 1. / (FLT)cnt * seconds);
+			// SV_VERBOSE(100, "%s accum %fsec " Point3_format, so->codename, seconds, LINMATH_VEC3_EXPAND(accum));
+		}
+		scale3d(accum, accum, 0);
+		cnt = 0;
+		start = timecode;
+		// SV_VERBOSE(200, "%s acc adjust %f %f gyro %f " Point3_format, so->codename, n, 1. / n, gerr,
+		// LINMATH_VEC3_EXPAND(so->gyro_bias));
+	} else {
+		add3d(accum, agm + 3, accum);
+		cnt++;
+	}
 
 	survive_recording_raw_imu_process(so, mask, accelgyromag, timecode, id);
 
@@ -287,7 +287,7 @@ void survive_default_imu_process( SurviveObject * so, int mask, FLT * accelgyrom
 		.hdr =
 			{
 				.pt = POSERDATA_IMU,
-				.timecode = timecode,
+				.timecode = SurviveSensorActivations_long_timecode_imu(&so->activations, timecode),
 			},
 		.datamask = mask,
 		.accel = {accelgyromag[0], accelgyromag[1], accelgyromag[2]},

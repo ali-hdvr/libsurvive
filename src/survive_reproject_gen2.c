@@ -50,8 +50,8 @@
 // a_i = \sum f[i] * (N-i) * a^(N-i-1)
 // m_i = \sum f[i] * a^(N-i-1)
 // It's useful to see them as separate eqs but not ultimately useful.
-static inline void calc_cal_series(double s, double *m, double *a) {
-	const double f[6] = {-8.0108022e-06, 0.0028679863, 5.3685255000000001e-06, 0.0076069798000000001};
+static inline void calc_cal_series(FLT s, FLT *m, FLT *a) {
+	const FLT f[6] = {-8.0108022e-06, 0.0028679863, 5.3685255000000001e-06, 0.0076069798000000001};
 
 	*m = f[0], *a = 0;
 	for (int i = 1; i < 6; i++) {
@@ -69,35 +69,35 @@ static inline FLT survive_reproject_axis_gen2(const BaseStationCal *bcal, FLT X,
 	const FLT ogeePhase = bcal->ogeephase;
 	const FLT ogeeMag = bcal->ogeemag;
 
-	double B = atan2(Z, X);
+	FLT B = atan2(Z, X);
 
-	double Ydeg = tilt + (axis ? -1 : 1) * M_PI / 6.;
-	double tanA = tan(Ydeg);
-	double normXZ = sqrt(X * X + Z * Z);
+	FLT Ydeg = tilt + (axis ? -1 : 1) * LINMATHPI / 6.;
+	FLT tanA = FLT_TAN(Ydeg);
+	FLT normXZ = sqrt(X * X + Z * Z);
 
-	double asinArg = linmath_enforce_range(tanA * Y / normXZ, -1, 1);
+	FLT asinArg = linmath_enforce_range(tanA * Y / normXZ, -1, 1);
 
-	double sinYdeg = sin(Ydeg);
-	double cosYdeg = cos(Ydeg);
+	FLT sinYdeg = FLT_SIN(Ydeg);
+	FLT cosYdeg = FLT_COS(Ydeg);
 
-	double sinPart = sin(B - asin(asinArg) + ogeePhase) * ogeeMag;
+	FLT sinPart = FLT_SIN(B - FLT_ASIN(asinArg) + ogeePhase) * ogeeMag;
 
-	double normXYZ = sqrt(X * X + Y * Y + Z * Z);
+	FLT normXYZ = FLT_SQRT(X * X + Y * Y + Z * Z);
 
-	double modAsinArg = linmath_enforce_range(Y / normXYZ / cosYdeg, -1, 1);
+	FLT modAsinArg = linmath_enforce_range(Y / normXYZ / cosYdeg, -1, 1);
 
-	double asinOut = asin(modAsinArg);
+	FLT asinOut = FLT_ASIN(modAsinArg);
 
-	double mod, acc;
+	FLT mod, acc;
 	calc_cal_series(asinOut, &mod, &acc);
 
-	double BcalCurved = sinPart + curve;
-	double asinArg2 = linmath_enforce_range(asinArg + mod * BcalCurved / (cosYdeg - acc * BcalCurved * sinYdeg), -1, 1);
+	FLT BcalCurved = sinPart + curve;
+	FLT asinArg2 = linmath_enforce_range(asinArg + mod * BcalCurved / (cosYdeg - acc * BcalCurved * sinYdeg), -1, 1);
 
-	double asinOut2 = asin(asinArg2);
-	double sinOut2 = sin(B - asinOut2 + gibPhase);
+	FLT asinOut2 = asin(asinArg2);
+	FLT sinOut2 = sin(B - asinOut2 + gibPhase);
 
-	double rtn = B - asinOut2 + sinOut2 * gibMag - phase - M_PI / 2.;
+	FLT rtn = B - asinOut2 + sinOut2 * gibMag - phase - LINMATHPI_2;
 	assert(!isnan(rtn));
 	return rtn;
 }
@@ -121,16 +121,6 @@ FLT survive_reproject_axis_y_gen2(const BaseStationCal *bcal, LinmathVec3d const
 void survive_reproject_xy_gen2(const BaseStationCal *bcal, LinmathVec3d const ptInLh, SurviveAngleReading out) {
 	out[0] = survive_reproject_axis_x_gen2_inline(bcal, ptInLh);
 	out[1] = survive_reproject_axis_y_gen2_inline(bcal, ptInLh);
-
-	/*
-	FLT X = ptInLh[0], Y = ptInLh[1], Z = ptInLh[2];
-	FLT tan30 = 0.57735026919;
-	FLT B = atan2(X, -Z);
-	FLT A = asin(linmath_enforce_range(tan30 * Y / sqrt(X * X + Z * Z), -1, 1));
-
-	volatile FLT u = -A - B;
-	volatile FLT v = A - B;
-*/
 	assert(!isnan(out[0]));
 	assert(!isnan(out[1]));
 }
@@ -151,6 +141,17 @@ void survive_reproject_gen2(const SurviveContext *ctx, int lighthouse, LinmathVe
 							SurviveAngleReading out) {
 	SurvivePose world2lh = InvertPoseRtn(&ctx->bsd[lighthouse].Pose);
 	survive_reproject_from_pose_gen2(ctx, lighthouse, &world2lh, ptInWorld, out);
+}
+
+void survive_reproject_full_gen2(const BaseStationCal *bcal, const SurvivePose *world2lh, const SurvivePose *obj2world,
+								 const LinmathVec3d obj_pt, SurviveAngleReading out) {
+	LinmathVec3d world_pt;
+	ApplyPoseToPoint(world_pt, obj2world, obj_pt);
+
+	LinmathPoint3d t_pt;
+	ApplyPoseToPoint(t_pt, world2lh, world_pt);
+
+	survive_reproject_xy_gen2(bcal, t_pt, out);
 }
 
 const survive_reproject_model_t survive_reproject_gen2_model = {

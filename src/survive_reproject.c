@@ -12,7 +12,7 @@
 
 static inline FLT survive_reproject_axis(const BaseStationCal *bcal, FLT axis_value, FLT other_axis_value, FLT Z,
 										 bool invert_axis_value) {
-	FLT ang = M_PI_2 - (invert_axis_value ? -1 : 1) * (atan2(axis_value, Z));
+	FLT ang = (FLT)M_PI_2 - (invert_axis_value ? -1.f : 1.f) * (FLT_ATAN2(axis_value, Z));
 
 	const FLT phase = bcal->phase;
 	const FLT curve = bcal->curve;
@@ -20,24 +20,24 @@ static inline FLT survive_reproject_axis(const BaseStationCal *bcal, FLT axis_va
 	const FLT gibPhase = bcal->gibpha;
 	const FLT gibMag = bcal->gibmag;
 
-    const FLT mag = sqrt(axis_value * axis_value  + Z * Z);
+	const FLT mag = FLT_SQRT(axis_value * axis_value + Z * Z);
 
 	ang -= phase;
-	double asin_arg = linmath_enforce_range((tilt)*other_axis_value / mag, -1, 1);
-	ang -= asin(asin_arg);
-	ang -= cos(gibPhase + ang) * gibMag;
-	ang += curve * atan2(other_axis_value, Z) * atan2(other_axis_value, Z);
+	FLT asin_arg = linmath_enforce_range((tilt)*other_axis_value / mag, -1, 1);
+	ang -= FLT_ASIN(asin_arg);
+	ang -= FLT_COS(gibPhase + ang) * gibMag;
+	ang += curve * FLT_ATAN2(other_axis_value, Z) * FLT_ATAN2(other_axis_value, Z);
 
 	assert(!isnan(ang));
 	return ang;
 }
 
 static inline FLT survive_reproject_axis_x_inline(const BaseStationCal *bcal, LinmathVec3d const ptInLh) {
-	return survive_reproject_axis(&bcal[0], ptInLh[0], ptInLh[1], -ptInLh[2], false) - M_PI / 2.;
+	return survive_reproject_axis(&bcal[0], ptInLh[0], ptInLh[1], -ptInLh[2], false) - (FLT)M_PI / 2.f;
 }
 
 static inline FLT survive_reproject_axis_y_inline(const BaseStationCal *bcal, LinmathVec3d const ptInLh) {
-	return survive_reproject_axis(&bcal[1], ptInLh[1], ptInLh[0], -ptInLh[2], true) - M_PI / 2.;
+	return survive_reproject_axis(&bcal[1], ptInLh[1], ptInLh[0], -ptInLh[2], true) - (FLT)M_PI / 2.f;
 }
 
 FLT survive_reproject_axis_x(const BaseStationCal *bcal, LinmathVec3d const ptInLh) {
@@ -63,7 +63,6 @@ void survive_reproject_full(const BaseStationCal *bcal, const SurvivePose *world
 
 	survive_reproject_xy(bcal, t_pt, out);
 }
-
 void survive_reproject_from_pose_with_bcal(const BaseStationCal *bcal, const SurvivePose *world2lh,
 										   LinmathVec3d const ptInWorld, SurviveAngleReading out) {
 	LinmathPoint3d ptInLh;

@@ -62,8 +62,8 @@ void PoserData_poser_pose_func(PoserData *poser_data, SurviveObject *so, const S
 		}
 
 		for (int i = 0; i < 7; i++)
-			assert(!isnan(((double *)imu2world)[i]));
-		SV_VERBOSE(500, "Object %s has pose " SurvivePose_format, so->codename, SURVIVE_POSE_EXPAND(head2world));
+			assert(!isnan(((FLT *)imu2world)[i]));
+
 		so->ctx->poseproc(so, PoserData_timecode(poser_data), &head2world);
 	}
 }
@@ -77,7 +77,7 @@ void PoserData_lighthouse_pose_func(PoserData *poser_data, SurviveObject *so, ui
 									SurvivePose *lighthouse_pose, SurvivePose *object_pose) {
 	if (poser_data->lighthouseposeproc) {
 		for (int i = 0; i < 7; i++)
-			assert(!isnan(((double *)lighthouse_pose)[i]));
+			assert(!isnan(((FLT *)lighthouse_pose)[i]));
 
 		assert(!quatiszero(lighthouse_pose->Rot));
 
@@ -129,7 +129,7 @@ void PoserData_lighthouse_pose_func(PoserData *poser_data, SurviveObject *so, ui
 
 			// Find the space with the same origin, but rotated so that gravity is up
 			SurvivePose lighthouse2objUp = {0}, object2objUp = {0};
-			float accel_mag = quatmagnitude(so->activations.accel);
+			FLT accel_mag = quatmagnitude(so->activations.accel);
 			if (accel_mag != 0.0 && !isnan(accel_mag)) {
 				quatfrom2vectors(object2objUp.Rot, so->activations.accel, up);
 			} else {
@@ -175,7 +175,7 @@ void PoserData_lighthouse_pose_func(PoserData *poser_data, SurviveObject *so, ui
 		}
 
 		for (int i = 0; i < 7; i++)
-			assert(!isnan(((double *)&lighthouse2world)[i]));
+			assert(!isnan(((FLT *)&lighthouse2world)[i]));
 
 		so->ctx->lighthouse_poseproc(so->ctx, lighthouse, &lighthouse2world, &obj2world);
 	}
@@ -206,12 +206,18 @@ void PoserData_lighthouse_poses_func(PoserData *poser_data, SurviveObject *so, S
 
 		uint32_t lh_indices[NUM_GEN2_LIGHTHOUSES] = {0};
 		uint32_t cnt = 0;
+
+		uint32_t reference_basestation = survive_configi(so->ctx, "reference-basestation", SC_GET, 0);
+
 		for (int lh = 0; lh < lighthouse_count; lh++) {
 			SurvivePose lh2object = lighthouse_pose[lh];
 			if (quatmagnitude(lh2object.Rot) != 0.0) {
 				lh_indices[cnt] = lh;
 				uint32_t lh0 = lh_indices[0];
-				if (so->ctx->bsd[lh].BaseStationID < so->ctx->bsd[lh0].BaseStationID) {
+				bool preferThisBSD = reference_basestation == 0
+										 ? (so->ctx->bsd[lh].BaseStationID < so->ctx->bsd[lh0].BaseStationID)
+										 : reference_basestation == so->ctx->bsd[lh].BaseStationID;
+				if (preferThisBSD) {
 					lh_indices[0] = lh;
 					lh_indices[cnt] = lh0;
 				}
@@ -242,13 +248,13 @@ void PoserData_lighthouse_poses_func(PoserData *poser_data, SurviveObject *so, S
 void PoserDataFullScene2Activations(const PoserDataFullScene *pdfs, SurviveSensorActivations *activations) {
 	SurviveSensorActivations_ctor(0, activations);
 	for (int i = 0; i < SENSORS_PER_OBJECT * NUM_GEN1_LIGHTHOUSES * 2; i++) {
-		double length = ((double *)pdfs->lengths)[i] * 48000000;
+		FLT length = ((FLT *)pdfs->lengths)[i] * 48000000;
 		if (length > 0)
 			((survive_timecode *)activations->lengths)[i] = (survive_timecode)length;
 	}
 
 	for (int i = 0; i < SENSORS_PER_OBJECT * NUM_GEN2_LIGHTHOUSES * 2; i++) {
-		((double *)activations->angles)[i] = ((double *)pdfs->angles)[i];
+		((FLT *)activations->angles)[i] = ((FLT *)pdfs->angles)[i];
 	}
 
 	memcpy(activations->accel, pdfs->lastimu.accel, sizeof(activations->accel));
@@ -261,11 +267,11 @@ SURVIVE_EXPORT void Activations2PoserDataFullScene(const struct SurviveSensorAct
 	for (int i = 0; i < SENSORS_PER_OBJECT * NUM_GEN1_LIGHTHOUSES * 2; i++) {
 		survive_timecode length = ((survive_timecode *)activations->lengths)[i];
 		if (length > 0)
-			((double *)pdfs->lengths)[i] = length / 48000000.;
+			((FLT *)pdfs->lengths)[i] = length / 48000000.;
 	}
 
 	for (int i = 0; i < SENSORS_PER_OBJECT * NUM_GEN2_LIGHTHOUSES * 2; i++) {
-		((double *)pdfs->angles)[i] = ((double *)activations->angles)[i];
+		((FLT *)pdfs->angles)[i] = ((FLT *)activations->angles)[i];
 	}
 
 	memcpy(pdfs->lastimu.accel, activations->accel, sizeof(activations->accel));

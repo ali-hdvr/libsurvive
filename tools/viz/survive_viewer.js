@@ -11,11 +11,40 @@ var oldPose = [ 0, 0, 0 ];
 var scene, camera, renderer, floor, fpv_camera;
 var fov_scale = 1;
 
+var report_in_imu = false;
+
+var raycaster = new THREE.Raycaster();
+
+var mouse = new THREE.Vector2();
+
+function onMouseMove(event) {
+	// calculate mouse position in normalized device coordinates
+	// (-1 to +1) for both components
+
+	mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+	mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+	var foundObj = false;
+	var intersects = raycaster.intersectObjects(scene.children, true);
+	for (var i = 0; i < intersects.length; i++) {
+		if (intersects[i].object.tooltip) {
+			$("#tooltip").text(intersects[i].object.tooltip);
+			$("#tooltip").css({top : event.clientY, left : event.clientX, position : 'absolute', display : 'block'});
+			foundObj = true;
+			break;
+		}
+	}
+
+	if (!foundObj) {
+		$("#tooltip").css({display : 'none'});
+	}
+}
+
 $(function() { $("#toggleBtn").click(function() { $("#cam").toggle(); }); });
 
 var lhColors = [
 	0xecba82, 0x4f3920, 0x8c7070, 0xf4eded, 0x4e6e5d, 0x3bc14a, 0x251351, 0xc97b84, 0xa85751, 0x251351, 0xc7eae4,
-	0xa7e8bd, 0xffd972, 0xaba361, 0x732c2c, 0x773344
+	0xa7e8bd, 0xffd972, 0xaba361, 0x732c2c, 0x773344c
 ];
 
 var lighthouses = {};
@@ -53,6 +82,7 @@ function add_lighthouse(idx, p, q) {
 
 	lhBoxMaterial = new THREE.MeshBasicMaterial({color : lhColors[idx]});
 	var lhBox = new THREE.Mesh(lhBoxGeom, lhBoxMaterial);
+	lhBox.tooltip = "Lighthouse " + (idx)
 	group.add(lhBox);
 
 	cone.translateZ(-height / 2);
@@ -273,6 +303,7 @@ function create_tracked_object(info) {
 	group.add(group_rot);
 	if (info.config && info.config.lighthouse_config) {
 		var trackref = new THREE.Group();
+		var sensorref = new THREE.Group();
 		var imuref = new THREE.Group();
 
 		var trackref_from_head = info.config.trackref_from_head;
@@ -300,7 +331,11 @@ function create_tracked_object(info) {
 			imuref.position.fromArray(pa);
 			imuref.quaternion.fromArray(qa);
 			imuref.verticesNeedUpdate = true;
+
+			var axes = new THREE.AxesHelper(.075);
+			imuref.add(axes);
 		}
+
 		for (var idx in info.config.lighthouse_config.modelPoints) {
 			var p = info.config.lighthouse_config.modelPoints[idx];
 			var pn = info.config.lighthouse_config.modelNormals[idx];
@@ -310,6 +345,7 @@ function create_tracked_object(info) {
 			var sensorMaterial = new THREE.MeshBasicMaterial({color : color});
 			var newSensor = new THREE.Mesh(sensorGeometry, sensorMaterial);
 			newSensor.position.set(p[0], p[1], p[2]);
+			newSensor.tooltip = info.tracker + " " + idx;
 
 			var normalGeom = new THREE.Geometry();
 			normalGeom.vertices.push(newSensor.position,
@@ -317,13 +353,16 @@ function create_tracked_object(info) {
 			var normal =
 				new THREE.Line(normalGeom, new THREE.LineBasicMaterial({color : idx == 4 ? 0xFF0000 : 0x00FF00}));
 			group.sensors[idx] = sensorMaterial;
-			trackref.add(normal);
-			trackref.add(newSensor);
+
+			sensorref.add(normal);
+			sensorref.add(newSensor);
 		}
 
 		group_rot.add(trackref);
 		trackref.add(imuref);
+		trackref.add(sensorref);
 		group.trackref = trackref;
+		group.sensorref = sensorref;
 		group.imuref = imuref;
 	} else {
 		axesLength = 1.5;
@@ -335,8 +374,8 @@ function create_tracked_object(info) {
 	objs[info.tracker] = group;
 	objs[info.tracker].group = group;
 	objs[info.tracker].group_rot = group_rot;
-	if (objs[info.tracker].trackref)
-		objs[info.tracker].trackref.visible = false;
+	if (objs[info.tracker].sensorref)
+		objs[info.tracker].sensorref.visible = false;
 
 	objs[info.tracker].group.position.set(NaN);
 	var velocityGeom = new THREE.Geometry();
@@ -358,7 +397,7 @@ function create_tracked_object(info) {
 var displayTrails = false;
 var trails = {};
 var MAX_LINE_POINTS = 100000;
-var trail_colors = [ 0x0, 0xffffff, 0x305ea8, 0x5e30a8 ];
+var trail_colors = [ 0x0, 0xffffff, 0x11FF11, 0x8888ff ];
 var trail_idx = 0;
 function get_trails(obj) {
 	if (trails[obj.tracker] == null) {
@@ -426,13 +465,14 @@ function update_object(v, allow_unsetup) {
 			poseCnt = 0;
 		}
 		poseCnt++;
+
 		objs[obj.tracker].group.position.set(obj.position[0], obj.position[1], obj.position[2]);
 		objs[obj.tracker].group_rot.quaternion.set(obj.quat[1], obj.quat[2], obj.quat[3], obj.quat[0]);
 		objs[obj.tracker].group.verticesNeedUpdate = true;
 		objs[obj.tracker].group_rot.verticesNeedUpdate = true;
 
-		if (objs[obj.tracker].trackref)
-			objs[obj.tracker].trackref.visible = $("#model")[0].checked;
+		if (objs[obj.tracker].sensorref)
+			objs[obj.tracker].sensorref.visible = $("#model")[0].checked;
 
 		if (objs[obj.tracker].oldPose == null) {
 			objs[obj.tracker].oldPose = [ 0, 0, 0 ];
@@ -453,7 +493,7 @@ function update_object(v, allow_unsetup) {
 			record_position(obj.tracker, time, obj);
 		}
 
-		if ("HMD" === obj.tracker) {
+		if ("HMD" === obj.tracker || "T20" == obj.tracker) {
 			var up = new THREE.Vector3(0, 1, 0);
 			var out = new THREE.Vector3(0, 0, -1);
 
@@ -528,6 +568,15 @@ var survive_log_handlers = {
 		var obj = {config : config, tracker : v[1]};
 
 		create_tracked_object(obj);
+	},
+	'OPTION' : function(v) {
+		var opt = {name : v[2], type : v[3], value : v[4]};
+
+		switch (opt.name) {
+		case 'report-in-imu':
+			report_in_imu = parseInt(opt.value);
+			break;
+		}
 	},
 	'B' : function(v, tracker) {
 		// #define SWEEP_ANGLE_PRINTF_ARGS dev, channel, sensor_id, timecode, plane, angle
@@ -635,6 +684,9 @@ function process_survive_handlers(msg) {
 	if (survive_log_handlers[s[2]]) {
 		survive_log_handlers[s[2]](s);
 	}
+	if (survive_log_handlers[s[1]]) {
+		survive_log_handlers[s[1]](s);
+	}
 
 	return {};
 }
@@ -681,7 +733,7 @@ function init() {
 	// SCENE //
 	///////////
 	scene = new THREE.Scene();
-
+	scene.background = new THREE.Color(0x888888);
 	var SCREEN_WIDTH = window.innerWidth, SCREEN_HEIGHT = window.innerHeight;
 	// camera attributes
 	var VIEW_ANGLE = 45, ASPECT = SCREEN_WIDTH / SCREEN_HEIGHT, NEAR = 0.01, FAR = 200;
@@ -697,6 +749,13 @@ function init() {
 	scene.add(camera);
 	camera.position.set(5, 2, 5.00);
 	camera.lookAt(scene.position);
+
+	window.addEventListener('mousemove', onMouseMove, false);
+	// Function called when download progresses
+	var onProgress = function(xhr) { console.log((xhr.loaded / xhr.total * 100) + '% loaded'); };
+
+	// Function called when download errors
+	var onError = function(error) { console.log('An error happened' + error); };
 
 	for (var z = 0; z < 5; z++) {
 		for (var i = -4; i < 5; i++) {
@@ -765,17 +824,44 @@ function init() {
 	scene.add(light);
 
 	var floorMaterial =
-		new THREE.MeshBasicMaterial({color : 0x000000, opacity : 0.15, transparent : true, side : THREE.FrontSide});
-	var floorGeometry = new THREE.PlaneGeometry(10, 10);
+		new THREE.MeshBasicMaterial({color : 0x888888, opacity : 1., transparent : true, side : THREE.FrontSide});
+	var floorGeometry = new THREE.PlaneGeometry(100, 100);
 	floor = new THREE.Mesh(floorGeometry, floorMaterial);
 	floor.position.z = -1;
 
-	scene.add(floor);
+	// scene.add(floor);
 
-	var skyBoxGeometry = new THREE.CubeGeometry(50, 50, 50);
-	var skyBoxMaterial = new THREE.MeshBasicMaterial({color : 0x888888, side : THREE.BackSide});
-	var skyBox = new THREE.Mesh(skyBoxGeometry, skyBoxMaterial);
-	scene.add(skyBox);
+	/**
+	 * Will be called when load completes.
+	 * The argument will be the loaded texture.
+	 */
+	var onLoad =
+		function(texture) {
+		var s = 50;
+		var im_w = 4096;
+		var im_h = 2048;
+		var circ = 2 * Math.PI * s;
+		var h = circ * im_h / im_w;
+		var skyBoxGeometry = new THREE.CylinderGeometry(s, s, h, 32);
+		texture.wrapS = THREE.RepeatWrapping;
+		texture.wrapT = THREE.RepeatWrapping;
+
+		var height = 10;
+		var width = 10;
+
+		texture.repeat.set(5, 5);
+
+		var skyBoxMaterial = new THREE.MeshBasicMaterial(
+			{map : texture, color : 0x888888, side : THREE.BackSide, transparent : true, opacity : .3});
+		var skyBox = new THREE.Mesh(skyBoxGeometry, skyBoxMaterial);
+		skyBox.rotateX(Math.PI / 2);
+		// skyBox.translateY(h/2.-2.);
+		scene.add(skyBox);
+	}
+
+	var loader = new THREE.TextureLoader();
+	loader.load('https://i.imgur.com/zUrlBcp.jpg', // 'https://i.imgur.com/7lmxb0b.jpg',
+				onLoad, onProgress, onError);
 
 	var axes = new THREE.AxesHelper(5);
 	scene.add(axes);
@@ -819,5 +905,9 @@ function render() {
 	ang = ang % (2 * Math.PI);
 
 	var use_fpv = $("#fpv").length > 0 && $("#fpv")[0].checked;
-	renderer.render(scene, use_fpv ? fpv_camera : camera);
+	var renderCamera = use_fpv ? fpv_camera : camera;
+	// update the picking ray with the camera and mouse position
+	raycaster.setFromCamera(mouse, renderCamera);
+
+	renderer.render(scene, renderCamera);
 }

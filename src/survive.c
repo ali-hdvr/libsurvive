@@ -1,3 +1,4 @@
+
 // Copyright 2016 <>< C. N. Lohr, FULLY Under MIT/x11 License.
 // All MIT/x11 Licensed Code in this file may be relicensed freely under the GPL or LGPL licenses.
 
@@ -490,6 +491,10 @@ survive_driver_fn GetDriverByConfig(SurviveContext *ctx, const char *name, const
 }
 static inline SurviveDeviceDriverReturn callDriver(SurviveContext *ctx, const char *DriverName, char *buffer) {
 	DeviceDriver dd = (DeviceDriver)GetDriver(DriverName);
+	if (dd == 0) {
+		return -1;
+	}
+
 	SurviveDeviceDriverReturn r = dd(ctx);
 	if (r < 0) {
 		SV_WARN("Driver %s reports status %d", DriverName + strlen("DriverReg"), r);
@@ -541,7 +546,7 @@ int survive_startup(SurviveContext *ctx) {
 			if (strcmp("htcvive", driverNameSuffix) != 0) {
 				if (enabled && callDriver(ctx, DriverName, buffer) == SURVIVE_DRIVER_NORMAL) {
 					// Auto drivers dont preclude the default HTC driver
-					loadDefaultDriver = manually_enabled == false;
+					loadDefaultDriver &= manually_enabled == false;
 				}
 			}
 		}
@@ -552,7 +557,7 @@ int survive_startup(SurviveContext *ctx) {
 	}
 
 	// Load the vive driver by default, even if not enabled as a flag
-	if ((loadDefaultDriver == true)) {
+	if (loadDefaultDriver == true || survive_configi(ctx, "htcvive", SC_GET, 0) != 0) {
 		callDriver(ctx, "DriverRegHTCVive", buffer);
 	}
 
@@ -606,12 +611,16 @@ int survive_startup(SurviveContext *ctx) {
 		ctx->hook##function = fbp ? fbp : survive_default_##hook;                                                      \
 	}
 #define SURVIVE_HOOK_PROCESS_DEF(hook)                                                                                 \
-	SURVIVE_EXPORT void survive_install_##hook##_fn(SurviveContext *ctx, hook##_process_func fbp) {                    \
+	SURVIVE_EXPORT hook##_process_func survive_install_##hook##_fn(SurviveContext *ctx, hook##_process_func fbp) {     \
+		hook##_process_func rtn = ctx->hook##proc;                                                                     \
 		ctx->hook##proc = fbp ? fbp : survive_default_##hook##_process;                                                \
+		return rtn;                                                                                                    \
 	}
 #define SURVIVE_HOOK_FEEDBACK_DEF(hook)                                                                                \
-	SURVIVE_EXPORT void survive_install_##hook##_fn(SurviveContext *ctx, hook##_feedback_func fbp) {                   \
+	SURVIVE_EXPORT hook##_feedback_func survive_install_##hook##_fn(SurviveContext *ctx, hook##_feedback_func fbp) {   \
+		hook##_feedback_func rtn = ctx->hook##function;                                                                \
 		ctx->hook##function = fbp ? fbp : survive_default_##hook;                                                      \
+		return rtn;                                                                                                    \
 	}
 
 #include "survive_hooks.h"

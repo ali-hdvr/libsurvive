@@ -1,5 +1,7 @@
 import symengine as sp
-from symengine import sqrt, cos, sin, Piecewise
+from symengine import sqrt, cos, sin, Piecewise, atan2
+
+import math
 
 phase_0, phase_1 = sp.symbols('phase_0, phase_1')
 tilt_0, tilt_1 = sp.symbols('tilt_0, tilt_1')
@@ -10,8 +12,13 @@ ogeePhase_0, ogeePhase_1 = sp.symbols('ogeePhase_0, ogeePhase_1')
 ogeeMag_0, ogeeMag_1 = sp.symbols('ogeeMag_0, ogeeMag_1')
 
 
+def time():
+    return sp.symbols('time')
+
+
 class SurviveType:
     pass
+
 
 class BaseStationCal(SurviveType):
     def __init__(self, cal):
@@ -21,6 +28,7 @@ class BaseStationCal(SurviveType):
          self.gibmag,
          self.ogeephase,
          self.ogeemag) = cal
+
 
 def bsd():
     return [bsc0(), bsc1()]
@@ -44,8 +52,10 @@ sensor_x, sensor_y, sensor_z = sp.symbols('sensor_x,sensor_y,sensor_z')
 
 axis = sp.symbols('axis')
 
+
 def axis_angle():
     return sp.symbols('aa_x, aa_y, aa_z')
+
 
 obj_rot = (obj_qw, obj_qi, obj_qj, obj_qk)
 
@@ -92,11 +102,24 @@ def lh_p_axisangle():
 
 def sensor_pt():
     return (sensor_x, sensor_y, sensor_z)
+def pt():
+    return sp.symbols('pt_x, pt_y, pt_z')
 
+def cross(sensor_pt, axis_angle):
+    a = sensor_pt
+    b = axis_angle
+    return [a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0]]
 
 def q():
     return (obj_qw, obj_qi, obj_qj, obj_qk)
 
+def q1():
+    return q()
+
+def q2():
+    return sp.symbols('q1_w, q1_x, q1_y, q1_z')
 
 def quatnormalize(q):
     qw, qi, qj, qk = q
@@ -125,9 +148,40 @@ def quatrotationmatrix(q):
          ])
 
 
+def quatrotateabout(q1, q2):
+    return sp.Matrix([(q1[0] * q2[0]) - (q1[1] * q2[1]) - (q1[2] * q2[2]) - (q1[3] * q2[3]),
+            (q1[0] * q2[1]) + (q1[1] * q2[0]) + (q1[2] * q2[3]) - (q1[3] * q2[2]),
+            (q1[0] * q2[2]) - (q1[1] * q2[3]) + (q1[2] * q2[0]) + (q1[3] * q2[1]),
+            (q1[0] * q2[3]) + (q1[1] * q2[2]) - (q1[2] * q2[1]) + (q1[3] * q2[0])])
+
+def quatrotatevector2(q, sensor_pt):
+    x, y, z = sensor_pt
+    return quatrotationmatrix(q) * sp.Matrix((x, y, z))
+
+def quatrotatevector(q, pt):
+    tmp = cross(q[1:], pt)
+    for i in range(3):
+        tmp[i] += pt[i] * q[0]
+    tmp2 = cross(q[1:], tmp)
+
+    return [
+        pt[0] + 2 * tmp2[0],
+        pt[1] + 2 * tmp2[1],
+        pt[2] + 2 * tmp2[2],
+    ]
+
+def quatrotatevector3(q, sensor_pt):
+    x, y, z = sensor_pt
+    pc = [0, x, y, z]
+    qc = quatgetreciprocal(q)
+    return quatrotateabout(quatrotateabout(q, pc), qc)[1:]
+    #return quatrotationmatrix(q) * sp.Matrix((x, y, z))
+
+
 def axisanglemagnitude(axis_angle):
     qw, qi, qj = axis_angle
-    return sp.sqrt(qw * qw + qi * qi + qj * qj)
+    mag = qw * qw + qi * qi + qj * qj
+    return Piecewise((sp.sqrt(mag), mag > 1e-20), (1e-10, True))
 
 
 def axisanglerotationmatrix(axis_angle):
@@ -146,12 +200,6 @@ def axisanglerotationmatrix(axis_angle):
          [y * x * one_minus_csr + z * snr, csr + y * y * one_minus_csr, y * z * one_minus_csr - x * snr],
          [z * x * one_minus_csr - y * snr, z * y * one_minus_csr + x * snr, csr + z * z * one_minus_csr]])
 
-
-def quatrotatevector(q, sensor_pt):
-    x, y, z = sensor_pt
-    return quatrotationmatrix(q) * sp.Matrix((x, y, z))
-
-
 def axisanglerotatevector(axis_angle, sensor_pt):
     x, y, z = sensor_pt
     return axisanglerotationmatrix(axis_angle) * sp.Matrix((x, y, z))
@@ -159,7 +207,6 @@ def axisanglerotatevector(axis_angle, sensor_pt):
 
 def quatgetreciprocal(q):
     return [q[0], -q[1], -q[2], -q[3]]
-
 
 def apply_axisangle_pose_to_pt(obj_p_axisangle, sensor_pt):
     px, py, pz = obj_p_axisangle.Pos
@@ -170,23 +217,35 @@ def invert_pose(obj_p):
     r = quatgetreciprocal(obj_p.Rot)
     return (-1 * quatrotatevector(r, obj_p.Pos), r)
 
+def quat2axisangle(q):
+    qw, qi, qj, qk = q
+    mag = qw * qw + qi * qi + qj * qj + 1e-10
+    angle = 2 * atan2(mag, q[0])
+    return q[1] * angle / mag,\
+           q[2] * angle / mag,\
+           q[3] * angle / mag
 
 def axisangle2quat(axis_angle):
-    qi, qj, qk = axis_angle
     mag = axisanglemagnitude(axis_angle)
-    v = [qi / mag, qj / mag, qk / mag]
+
+    x = axis_angle[0] / mag
+    y = axis_angle[1] / mag
+    z = axis_angle[2] / mag
 
     sn = sin(mag / 2.0)
-    return quatnormalize([cos(mag / 2.0), sn * v[0], sn * v[1], sn * v[2]])
+    return quatnormalize([cos(mag / 2.0), sn * x, sn * y, sn * z])
 
 
 def axisangle2pose(obj_p_axisangle):
     return obj_p_axisangle.Pos, axisangle2quat(obj_p_axisangle.Rot)
 
+def add3d(a, b):
+    return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 
 def apply_pose_to_pt(obj_p, sensor_pt):
     px, py, pz = obj_p.Pos
-    return quatrotatevector(obj_p.Rot, sensor_pt) + sp.Matrix((px, py, pz))
+    #return quatrotatevector(obj_p.Rot, sensor_pt) + sp.Matrix((px, py, pz))
+    return add3d(quatrotatevector(obj_p.Rot, sensor_pt), obj_p.Pos)
 
 
 def sensor_to_world(obj_p, sensor_pt, lh_p):
@@ -195,10 +254,29 @@ def sensor_to_world(obj_p, sensor_pt, lh_p):
     return apply_axisangle_pose_to_pt(lh_p, apply_axisangle_pose_to_pt(obj_p, sensor_pt))
 
 
+def apply_ang_velocity(axis_angle, time, q):
+    qi, qj, qk = axis_angle
+    q1 = axisangle2quat((qi * time, qj * time, qk * time))
+    if len(q) == 3:
+        return quatrotateabout(q1, axisangle2quat(q))
+    return quatrotateabout(q1, q)
+
+
 def simple_neg(x):
     if isinstance(x, sp.Expr):
         return sp.Mul(x, -1, evaluate=False)
     return -x
+
+
+def imu_rot():
+    return (*q(), *axis_angle())
+
+
+def imu_rot_aa():
+    return (*axis_angle(), *(lh_qi, lh_qj, lh_qk))
+
+def up_in_obj():
+    return list(sp.symbols('obj_up_x, obj_up_y, obj_up_z'))
 
 
 generate = [
@@ -214,7 +292,10 @@ generate = [
     quatgetreciprocal,
     quatmagnitude,
     quatnormalize,
-    quatrotatevector,
+        quatrotatevector,
+        quatrotatevector2,
     quatrotationmatrix,
-    sensor_to_world
+    sensor_to_world,
+    cross,
+    apply_ang_velocity
 ]

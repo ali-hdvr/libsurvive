@@ -4,6 +4,7 @@
 #define _LINMATH_H
 
 #include <stdbool.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,10 +25,13 @@ extern "C" {
 #define PFTHREE(x) (x)[0], (x)[1], (x)[2]
 #define PFFOUR(x) (x)[0], (x)[1], (x)[2], (x)[3]
 
-#define LINMATHPI ((FLT)3.14159265358979323846)
+#define LINMATHPI ((FLT)3.14159265358979323846)	  /* pi */
+#define LINMATHPI_2 ((FLT)1.57079632679489661923) /* pi/2 */
+#define LINMATHPI_4 ((FLT)0.78539816339744830962) /* pi/4 */
 
-// uncomment the following line to use double precision instead of single precision.
-//#define USE_DOUBLE
+#define CREATE_STACK_MAT(name, rows, cols)                                                                             \
+	FLT *_##name = alloca(rows * cols * sizeof(FLT));                                                                  \
+	CvMat name = cvMat(rows, cols, SURVIVE_CV_F, _##name);
 
 #ifdef USE_FLOAT
 
@@ -42,6 +46,11 @@ extern "C" {
 #define FLT_FABS__ fabsf
 #define FLT_STRTO strtof
 
+#define SURVIVE_CV_F CV_32F
+#define CV_FLT CV_32F
+#define CV_RAW_PTR(X) ((X)->data.fl)
+#define FLT_POW powf
+
 #else
 
 #define USE_DOUBLE 1
@@ -55,7 +64,9 @@ extern "C" {
 #define FLT_ATAN2 atan2
 #define FLT_FABS__ fabs
 #define FLT_STRTO strtod
-
+#define SURVIVE_CV_F CV_64F
+#define CV_FLT CV_64F
+#define CV_RAW_PTR(X) ((X)->data.db)
 #endif
 
 #ifdef TCC
@@ -94,6 +105,8 @@ LINMATH_EXPORT extern LinmathPose LinmathPose_Identity;
 LINMATH_EXPORT void cross3d(FLT *out, const FLT *a, const FLT *b);
 
 LINMATH_EXPORT void sub3d(FLT *out, const FLT *a, const FLT *b);
+LINMATH_EXPORT void subnd(FLT *out, const FLT *a, const FLT *b, size_t size);
+LINMATH_EXPORT void addnd(FLT *out, const FLT *a, const FLT *b, size_t size);
 
 LINMATH_EXPORT void add3d(FLT *out, const FLT *a, const FLT *b);
 
@@ -284,6 +297,9 @@ static inline LinmathPose EulerPose2Pose(const LinmathEulerPose *pose) {
 	quatfromeuler(p.Rot, pose->EulerRot);
 	return p;
 }
+
+LINMATH_EXPORT FLT linmath_rand(FLT min, FLT max);
+LINMATH_EXPORT FLT linmath_normrand(FLT mu, FLT sigma);
 
 #ifdef __cplusplus
 }

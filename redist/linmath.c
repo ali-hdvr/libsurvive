@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "minimal_opencv.h"
+#include <malloc.h>
 
 #ifndef M_PI
 # define M_PI           3.14159265358979323846  /* pi */
@@ -25,7 +26,14 @@ inline void sub3d(FLT *out, const FLT *a, const FLT *b) {
 	out[1] = a[1] - b[1];
 	out[2] = a[2] - b[2];
 }
-
+LINMATH_EXPORT void addnd(FLT *out, const FLT *a, const FLT *b, size_t size) {
+	for (int i = 0; i < size; i++)
+		out[i] = a[i] + b[i];
+}
+LINMATH_EXPORT void subnd(FLT *out, const FLT *a, const FLT *b, size_t size) {
+	for (int i = 0; i < size; i++)
+		out[i] = a[i] - b[i];
+}
 inline void add3d(FLT *out, const FLT *a, const FLT *b) {
 	out[0] = a[0] + b[0];
 	out[1] = a[1] + b[1];
@@ -540,6 +548,9 @@ inline void quatrotateabout(LinmathQuat qout, const LinmathQuat q1, const Linmat
 	if (aliased) {
 		quatcopy(qout, rtn);
 	}
+
+	for (int i = 0; i < 4; i++)
+		assert(!isnan(qout[i]));
 }
 
 inline void findnearestaxisanglemag(LinmathAxisAngleMag out, const LinmathAxisAngleMag inc,
@@ -861,24 +872,24 @@ inline void PoseToMatrix(FLT *matrix44, const LinmathPose *pose_in) {
 void KabschCentered(LinmathQuat qout, const FLT *ptsA, const FLT *ptsB, int num_pts) {
 	// Note: The following follows along with https://en.wikipedia.org/wiki/Kabsch_algorithm
 	// for the most part but we use some transpose identities to let avoid unneeded transposes
-	CvMat A = cvMat(num_pts, 3, CV_64F, (FLT *)ptsA);
-	CvMat B = cvMat(num_pts, 3, CV_64F, (FLT *)ptsB);
+	CvMat A = cvMat(num_pts, 3, CV_FLT, (FLT *)ptsA);
+	CvMat B = cvMat(num_pts, 3, CV_FLT, (FLT *)ptsB);
 
-	double _C[9] = {0};
-	CvMat C = cvMat(3, 3, CV_64F, _C);
+	FLT _C[9] = {0};
+	CvMat C = cvMat(3, 3, CV_FLT, _C);
 	cvGEMM(&B, &A, 1, 0, 0, &C, CV_GEMM_A_T);
 
-	double _U[9] = {0};
-	double _W[9] = {0};
-	double _VT[9] = {0};
-	CvMat U = cvMat(3, 3, CV_64F, _U);
-	CvMat W = cvMat(3, 3, CV_64F, _W);
-	CvMat VT = cvMat(3, 3, CV_64F, _VT);
+	FLT _U[9] = {0};
+	FLT _W[9] = {0};
+	FLT _VT[9] = {0};
+	CvMat U = cvMat(3, 3, CV_FLT, _U);
+	CvMat W = cvMat(3, 3, CV_FLT, _W);
+	CvMat VT = cvMat(3, 3, CV_FLT, _VT);
 
 	cvSVD(&C, &W, &U, &VT, CV_SVD_V_T | CV_SVD_MODIFY_A);
 
-	double _R[9] = {0};
-	CvMat R = cvMat(3, 3, CV_64F, _R);
+	FLT _R[9] = {0};
+	CvMat R = cvMat(3, 3, CV_FLT, _R);
 	cvGEMM(&U, &VT, 1, 0, 0, &R, 0);
 
 	// Enforce RH rule
@@ -896,25 +907,44 @@ LINMATH_EXPORT void Kabsch(LinmathPose *B2Atx, const FLT *_ptsA, const FLT *_pts
 	FLT centerA[3];
 	FLT centerB[3];
 
-#ifndef _WIN32
-	FLT ptsA[num_pts * 3];
-	FLT ptsB[num_pts * 3];
-#else
-	FLT *ptsA = malloc(num_pts * 3 * sizeof(FLT));
-	FLT *ptsB = malloc(num_pts * 3 * sizeof(FLT));
-#endif
+	FLT *ptsA = alloca(num_pts * 3 * sizeof(FLT));
+	FLT *ptsB = alloca(num_pts * 3 * sizeof(FLT));
+
 	center3d(ptsA, centerA, _ptsA, num_pts);
 	center3d(ptsB, centerB, _ptsB, num_pts);
 
 	KabschCentered(B2Atx->Rot, ptsA, ptsB, num_pts);
 	quatrotatevector(centerA, B2Atx->Rot, centerA);
 	sub3d(B2Atx->Pos, centerB, centerA);
-
-#ifdef _WIN32
-	free(ptsA);
-	free(ptsB);
-#endif
 }
 
 LINMATH_EXPORT LinmathQuat LinmathQuat_Identity = {1.0};
 LINMATH_EXPORT LinmathPose LinmathPose_Identity = {.Rot = {1.0}};
+
+inline FLT linmath_rand(FLT min, FLT max) {
+	FLT r = rand() / (FLT)RAND_MAX;
+	r *= (max - min);
+	r += min;
+	return r;
+}
+FLT linmath_normrand(FLT mu, FLT sigma) {
+	static const double epsilon = 0.0000001;
+
+	static double z1;
+	static bool generate;
+	generate = !generate;
+
+	if (!generate)
+		return z1 * sigma + mu;
+
+	double u1, u2;
+	do {
+		u1 = rand() * (1.0 / RAND_MAX);
+		u2 = rand() * (1.0 / RAND_MAX);
+	} while (u1 <= epsilon);
+
+	double z0;
+	z0 = sqrt(-2.0 * log(u1)) * cos(LINMATHPI * 2. * u2);
+	z1 = sqrt(-2.0 * log(u1)) * sin(LINMATHPI * 2. * u2);
+	return z0 * sigma + mu;
+}

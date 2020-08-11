@@ -5,13 +5,22 @@ option(ENABLE_WARNINGS_AS_ERRORS "Use to flag all warnings as errors" OFF)
 include(CheckIncludeFile)
 
 IF(UNIX)
-	SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC -std=gnu99 -rdynamic -Werror=incompatible-pointer-types -Wall -Wno-unused-variable -Wno-switch -Wno-parentheses -Wno-missing-braces -Werror=implicit-function-declaration -Wpedantic")
+	SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC -std=gnu99 -rdynamic -Werror=incompatible-pointer-types -Wall -Wno-unused-variable -Wno-switch -Wno-parentheses -Wno-missing-braces -Werror=implicit-function-declaration -Wpedantic -Werror=return-type -fvisibility=hidden -Werror=vla")
 	if(ENABLE_WARNINGS_AS_ERRORS)
 		SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror")
 	endif()
 ENDIF()
 
+IF(WIN32)
+	SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /wd4244 /wd4996 /wd4018 /wd4101 /wd4477 /wd4068 /wd4217")
+endif()
+
 include_directories(redist include/libsurvive include)
+
+option(USE_SINGLE_PRECISION "Use float instead of double" OFF)
+if(USE_SINGLE_PRECISION)
+    add_definitions(-DUSE_FLOAT)
+endif()
 
 option(USE_HIDAPI "Use HIDAPI instead of libusb" OFF)
 option(USE_ASAN "Use address sanitizer" OFF)
@@ -78,7 +87,6 @@ list (APPEND CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE)
 
 include (CheckSymbolExists)
 check_symbol_exists (fopencookie stdio.h HAVE_FOPENCOOKIE)
-check_symbol_exists (funopen stdio.h HAVE_FUNOPEN)
 
 if(HAVE_FOPENCOOKIE)
 	add_definitions(-DHAVE_FOPENCOOKIE)
@@ -145,9 +153,9 @@ endif()
 
 SET(PLUGINS
         driver_dummy driver_vive driver_simulator
-        disambiguator_turvey disambiguator_statebased disambiguator_charles
-        poser_dummy poser_mpfit poser_epnp poser_imu poser_charlesrefine
-		poser_barycentric_svd
+        disambiguator_statebased
+        poser_dummy poser_mpfit poser_imu
+	poser_barycentric_svd
 )
 
 check_include_file("gattlib.h" HAVE_GATTLIB_H)
@@ -167,11 +175,6 @@ IF(NOT WIN32)
   endif()
 endif()
 
-if(UNIX)
-	list(APPEND PLUGINS driver_udp)
-endif()
-
-set(poser_epnp_ADDITIONAL_SRCS src/epnp/epnp.c)
 set(poser_barycentric_svd_ADDITIONAL_SRCS src/barycentric_svd/barycentric_svd.c )
 
 add_custom_target(survive_plugins)
@@ -238,7 +241,7 @@ if(OPENVR_LIBRARIES)
 	add_subdirectory(tools/openvr_driver)
 endif()
 
-
+file(COPY survive-websocketd DESTINATION ${CMAKE_BINARY_DIR})
 install(TARGETS ${PLUGINS} DESTINATION lib/libsurvive/plugins)
 
 install(TARGETS survive DESTINATION lib/libsurvive)

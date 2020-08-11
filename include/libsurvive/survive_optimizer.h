@@ -18,6 +18,8 @@ typedef struct {
 	uint8_t sensor_idx;
 	uint8_t axis;
 	int object;
+
+	bool invalid;
 } survive_optimizer_measurement;
 
 struct mp_par_struct;
@@ -32,7 +34,7 @@ typedef struct {
 	FLT current_bias;
 	SurvivePose initialPose;
 
-	double *parameters;
+	FLT *parameters;
 	struct mp_par_struct *parameters_info;
 
 	int poseLength;
@@ -41,8 +43,13 @@ typedef struct {
 
 	mp_config *cfg;
 
+	bool needsFiltering;
+
 	struct {
-		uint32_t dropped_data_cnt;
+		uint32_t total_meas_cnt;
+		uint32_t total_lh_cnt;
+		uint32_t dropped_meas_cnt;
+		uint32_t dropped_lh_cnt;
 	} stats;
 } survive_optimizer;
 
@@ -90,7 +97,7 @@ SURVIVE_EXPORT BaseStationCal *survive_optimizer_get_calibration(survive_optimiz
 
 SURVIVE_EXPORT int survive_optimizer_get_sensors_index(const survive_optimizer *ctx);
 
-SURVIVE_EXPORT double *survive_optimizer_get_sensors(survive_optimizer *ctx);
+SURVIVE_EXPORT FLT *survive_optimizer_get_sensors(survive_optimizer *ctx);
 
 SURVIVE_EXPORT void survive_optimizer_setup_pose(survive_optimizer *mpfit_ctx, const SurvivePose *pose, bool isFixed,
 												 int use_jacobian_function);
@@ -118,8 +125,8 @@ SURVIVE_EXPORT mp_config *survive_optimizer_precise_config();
 
 SURVIVE_EXPORT int survive_optimizer_nonfixed_cnt(const survive_optimizer *optimizer);
 
-SURVIVE_EXPORT void survive_optimizer_get_nonfixed(const survive_optimizer *optimizer, double *params);
-SURVIVE_EXPORT void survive_optimizer_set_nonfixed(survive_optimizer *optimizer, double *params);
+SURVIVE_EXPORT void survive_optimizer_get_nonfixed(const survive_optimizer *optimizer, FLT *params);
+SURVIVE_EXPORT void survive_optimizer_set_nonfixed(survive_optimizer *optimizer, FLT *params);
 
 #ifdef __cplusplus
 }

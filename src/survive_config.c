@@ -61,18 +61,31 @@ void survive_config_bind_variable( char vt, const char * name, const char * desc
 	if( !config->name ) config->name = name;
 	if( config->type && config->type != vt )
 	{
-		fprintf( stderr, "Fatal: Internal error on variable %s.  Types disagree [%c/%c].\n", name, config->type, vt ); 
+		fprintf(stderr, "Fatal: Internal error on variable %s.  Types disagree [%c/%c].\n", name, config->type, vt);
 		exit( -2 );
 	}
 	config->type = vt;
+
 	switch( vt )
 	{
 	case 'i': config->data_default.i = va_arg(ap, int); break;
-	case 'f': config->data_default.f = va_arg(ap, FLT); break;
+	case 'f':
+		config->data_default.f = va_arg(ap, double);
+		break;
 	case 's': config->data_default.s = va_arg(ap, char *); break;
 	default:
 		fprintf( stderr, "Fatal: Internal error on variable %s.  Unknown type %c\n", name, vt );
 	}
+
+	uint32_t marker = va_arg(ap, uint32_t);
+	if (marker != 0xcafebeef) {
+		fprintf(stderr, "Fatal: Internal error on variable %s.\n", name);
+		fprintf(stderr,
+				"This is happening because the default value doesn't have the same type as the indicated type.\n");
+		fprintf(stderr, "Note that 'f' types MUST be seen as float/double type to the compiler; ie '1.' and not '1'\n");
+		exit(-2);
+	}
+	va_end(ap);
 }
 
 int survive_print_help_for_parameter( const char * tomap )
@@ -92,6 +105,35 @@ int survive_print_help_for_parameter( const char * tomap )
 static const char *USAGE_FORMAT_INT = USAGE_FORMAT "%13d    ";
 static const char *USAGE_FORMAT_FLOAT = USAGE_FORMAT "%13f    ";
 static const char *USAGE_FORMAT_STRING = USAGE_FORMAT "%13s    ";
+
+static int type_char(char type) {
+	switch (type) {
+	case CONFIG_UINT32:
+		return 'i';
+	case CONFIG_FLOAT:
+		return 'f';
+	case CONFIG_STRING:
+		return 's';
+	case CONFIG_FLOAT_ARRAY:
+		return 'a';
+	default:
+		return 'u';
+	}
+}
+
+static void survive_config_iterate_grp(SurviveContext *ctx, config_group *grp, survive_config_iterate_fn fn,
+									   void *user) {
+	for (int i = 0; i < grp->used_entries; i++) {
+		config_entry *ce = &grp->config_entries[i];
+		uint8_t type = type_char(ce->type);
+		fn(ctx, ce->tag, type, user);
+	}
+}
+
+void survive_config_iterate(SurviveContext *ctx, survive_config_iterate_fn fn, void *user) {
+	survive_config_iterate_grp(ctx, ctx->temporary_config_values, fn, user);
+	survive_config_iterate_grp(ctx, ctx->global_config_values, fn, user);
+}
 
 static void PrintConfigGroup(config_group * grp, const char ** chkval, int * cvs, int verbose )
 {
@@ -241,6 +283,7 @@ void destroy_config_group(config_group *cg) {
 	if (cg->config_entries == NULL)
 		return;
 
+	cg->used_entries = 0;
 	for (i = 0; i < cg->max_entries; ++i) {
 		destroy_config_entry(cg->config_entries + i);
 	}
@@ -334,7 +377,8 @@ void config_set_lighthouse(config_group *lh_config, BaseStationData *bsd, uint8_
 	config_set_uint32(cg, "mode", bsd->mode);
 	config_set_float_a(cg, "pose", &bsd->Pose.Pos[0], 7);
 
-	quatnormalize(bsd->Pose.Rot, bsd->Pose.Rot);
+	if (!quatiszero(bsd->Pose.Rot))
+		quatnormalize(bsd->Pose.Rot, bsd->Pose.Rot);
 
 	FLT cal[sizeof(bsd->fcal)] = { 0 };
 
@@ -369,6 +413,7 @@ void sstrcpy(char **dest, const char *src) {
 	*dest = ptr;
 
 	strcpy(*dest, src);
+	// printf("%s -> %s\r\n", *dest, src);
 }
 
 config_entry *find_config_entry(config_group *cg, const char *tag) {
@@ -420,7 +465,7 @@ uint16_t config_read_float_array(config_group *cg, const char *tag, FLT *values,
 
 	if (cv != NULL) {
 		for (unsigned int i = 0; i < CFG_MIN(count, cv->elements); i++) {
-			values[i] = ((double *)cv->data)[i];
+			values[i] = ((FLT *)cv->data)[i];
 		}
 		return cv->elements;
 	}
@@ -747,6 +792,38 @@ static uint32_t config_entry_as_uint32_t(config_entry *entry) {
 	return 0;
 }
 
+SURVIVE_EXPORT void survive_config_as_str(SurviveContext *ctx, char *output, size_t n, const char *tag,
+										  const char *def) {
+	if (n == 0 || output == 0)
+		return;
+
+	config_entry *entry = sc_search(ctx, tag);
+	if (entry == 0) {
+		if (def == 0) {
+			output[0] = 0;
+		} else {
+			strncpy(output, def, n);
+		}
+	}
+
+	switch (entry->type) {
+	case CONFIG_FLOAT:
+		snprintf(output, n, "%f", (float)entry->numeric.f);
+		break;
+	case CONFIG_UINT32:
+		snprintf(output, n, "%i", entry->numeric.i);
+		break;
+	case CONFIG_STRING:
+		snprintf(output, n, "%s", entry->data);
+		break;
+	case CONFIG_FLOAT_ARRAY:
+
+		snprintf(output, n, "%s", entry->data);
+	case CONFIG_UNKNOWN:
+		break;
+	}
+}
+
 bool survive_config_is_set(SurviveContext *ctx, const char *tag) {
 	config_entry *cv = sc_search(ctx, tag);
 	return cv != 0;
@@ -903,13 +980,16 @@ static void survive_attach_config(SurviveContext *ctx, const char *tag, void * v
 	switch (type) {
 	case 'i':
 		*((int *)var) = survive_configi(ctx, tag, SC_GET, 0);
+		SV_VERBOSE(100, "\t%s: %i", tag, *((int *)var));
 		break;
 	case 'f':
 		*((FLT *)var) = survive_configf(ctx, tag, SC_GET, 0);
+		SV_VERBOSE(100, "\t%s: %+f", tag, *((FLT *)var));
 		break;
 	case 's': {
 		const char *cv = survive_configs(ctx, tag, SC_SET, 0);
 		strcpy(var, cv);
+		SV_VERBOSE(100, "\t%s: '%s'", tag, cv);
 		break;
 	}
 	default:

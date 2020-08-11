@@ -203,18 +203,29 @@ static int usbmon_poll(struct SurviveContext *ctx, void *_driver) {
 	return 0;
 }
 
+static double timestamp_in_s() {
+	static double start_time_s = 0;
+	if (start_time_s == 0.)
+		start_time_s = OGGetAbsoluteTime();
+	return OGGetAbsoluteTime() - start_time_s;
+}
+
 static int usbmon_close(struct SurviveContext *ctx, void *_driver) {
 	SurviveDriverUSBMon *driver = _driver;
 	driver->keepRunning = false;
 	pcap_breakloop(driver->pcap);
+
+	survive_release_ctx_lock(ctx);
 	SV_VERBOSE(100, "Waiting on pcap thread...");
 	OGJoinThread(driver->pcap_thread);
+	survive_get_ctx_lock(ctx);
 
 	struct pcap_stat stats = {0};
 	pcap_stats(driver->pcap, &stats);
 
-	SV_INFO("usbmon saw %u/%u packets, %u dropped, %u dropped in driver in %f seconds", (uint32_t)driver->packet_cnt,
-			stats.ps_recv, stats.ps_drop, stats.ps_ifdrop, driver->time_now);
+	SV_INFO("usbmon saw %u/%u packets, %u dropped, %u dropped in driver in %.2f seconds (%.2fs runtime)",
+			(uint32_t)driver->packet_cnt, stats.ps_recv, stats.ps_drop, stats.ps_ifdrop, driver->time_now,
+			timestamp_in_s());
 	if (driver->pcapDumper) {
 		pcap_dump_close(driver->pcapDumper);
 	}
@@ -314,7 +325,7 @@ static int setup_usb_devices(SurviveDriverUSBMon *sp) {
 	SurviveContext *ctx = sp->ctx;
 	int rtn = 0;
 
-	int device_cnts[DEVICES_CNT];
+	int *device_cnts = alloca(sizeof(int) * DEVICES_CNT);
 	memset(device_cnts, 0, sizeof(int) * DEVICES_CNT);
 
 	const char *usbmon_record = survive_configs(ctx, "usbmon-record", SC_GET, 0);
@@ -398,13 +409,6 @@ const char *requestTypeToStr(uint8_t requestType) {
 		return "SYNC_FRAME";
 	}
 	return "<unknown>";
-}
-
-static double timestamp_in_s() {
-	static double start_time_s = 0;
-	if (start_time_s == 0.)
-		start_time_s = OGGetAbsoluteTime();
-	return OGGetAbsoluteTime() - start_time_s;
 }
 
 static double survive_usbmon_playback_run_time(const SurviveContext *ctx, void *_driver) {
@@ -627,10 +631,18 @@ static int DriverRegUSBMon_(SurviveContext *ctx, int driver_id) {
 	} else {
 		SV_INFO("Starting usbmon");
 	}
-	if (usbmon_playback && *usbmon_playback) {
+
+	bool isPlaybackMode = usbmon_playback && *usbmon_playback;
+	if (isPlaybackMode) {
 		SV_INFO("Opening '%s' for usb playback", usbmon_playback);
 		FILE *pF = open_playback(usbmon_playback, "r");
 		sp->pcap = pcap_fopen_offline(pF, sp->errbuf);
+
+#if !defined(HAVE_FOPENCOOKIE)
+		if (strcmp(".gz", usbmon_playback + strlen(usbmon_playback) - 3) == 0) {
+			SV_WARN("Trying to open a compressed file without FOPENCOOKIE support in the usbmon driver.");
+		}
+#endif
 		sp->playback_factor = survive_configf(ctx, "playback-factor", SC_GET, 1.0);
 		survive_install_run_time_fn(ctx, survive_usbmon_playback_run_time, sp);
 	} else {
@@ -638,10 +650,13 @@ static int DriverRegUSBMon_(SurviveContext *ctx, int driver_id) {
 	}
 
 	if (sp->pcap == NULL) {
-		SV_ERROR(SURVIVE_ERROR_HARWARE_FAULT,
-				 "pcap_open_live() failed due to [%s] - You probably need to call 'sudo modprobe usbmon'. If you want "
-				 "to capture as a normal user; try 'sudo setfacl -m u:$USER:r /dev/usbmon*'",
-				 sp->errbuf);
+
+		const char *playback_error = "pcap_fopen_offline failed due to [%s] - The file either doesn't exist, is "
+									 "corrupted, or uses compression which isn't enabled for this driver binary";
+		const char *live_error =
+			"pcap_open_live() failed due to [%s] - You probably need to call 'sudo modprobe usbmon'. If you want "
+			"to capture as a normal user; try 'sudo setfacl -m u:$USER:r /dev/usbmon*'";
+		SV_ERROR(SURVIVE_ERROR_HARWARE_FAULT, isPlaybackMode ? playback_error : live_error, sp->errbuf);
 		return SURVIVE_DRIVER_ERROR;
 	}
 
@@ -664,6 +679,7 @@ static int DriverRegUSBMon_(SurviveContext *ctx, int driver_id) {
 	if (device_count) {
 		sp->keepRunning = true;
 		sp->pcap_thread = OGCreateThread(pcap_thread_fn, sp);
+		OGNameThread(sp->pcap_thread, "pcap_thread");
 
 		survive_add_driver(ctx, sp, usbmon_poll, usbmon_close, 0);
 	} else {

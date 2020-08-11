@@ -8,7 +8,7 @@ void str_ensure_size(cstring *str, size_t s) {
 	s++;
 	if (str->size >= s)
 		return;
-	size_t realloc_size = str->size + 1024;
+	size_t realloc_size = str->size + 128;
 	if (s > realloc_size)
 		realloc_size = s;
 	str->d = SV_REALLOC(str->d, realloc_size);
@@ -42,4 +42,10 @@ int str_append_printf(cstring *str, const char *format, ...) {
 	str->length -= (needed + 1 - rtn);
 	assert(strlen(str->d) == str->length);
 	return rtn;
+}
+
+void str_clear(cstring *str) {
+	str->length = 0;
+	if (str->size > 0)
+		str->d[0] = 0;
 }
